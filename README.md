@@ -53,6 +53,8 @@ Example with `colors-messages.sh`:
 
 # Import shared scripts
 source "/path/to/shared-scripts/colors-messages.sh"
+ou
+source /dev/stdin <<< "$(curl -fsSL https://raw.githubusercontent.com/Nohame/shared-scripts/main/mac-sh/colors-messages.sh)"
 
 # Example usage
 display_success "Shared scripts have been successfully imported."
