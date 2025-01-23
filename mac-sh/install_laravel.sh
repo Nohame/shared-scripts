@@ -1,378 +1,281 @@
 #!/bin/bash
 
-# Vérification si Docker est installé
-if ! [ -x "$(command -v docker)" ]; then
-  echo "Erreur : Docker n'est pas installé. Veuillez l'installer et réessayer." >&2
-  exit 1
-fi
+# Charger le script distant pour les couleurs et les messages
+source /dev/stdin <<< "$(curl -fsSL https://raw.githubusercontent.com/Nohame/shared-scripts/main/mac-sh/colors-messages.sh)"
 
-# Vérification si Composer est installé
-if ! [ -x "$(command -v composer)" ]; then
-  echo "Erreur : Composer n'est pas installé. Veuillez l'installer et réessayer." >&2
-  exit 1
-fi
-
-# Demander le chemin d'installation ou utiliser le dossier courant par défaut
-read -p "Entrez le chemin d'installation (par défaut : dossier courant) : " install_path
-install_path=${install_path:-$(pwd)}
-
-# Créer le dossier d'installation s'il n'existe pas
-if [ ! -d "$install_path" ]; then
-  mkdir -p "$install_path"
-fi
-
-# Demander le nom de l'application
-read -p "Entrez le nom de l'application (par défaut : laravel-app) : " app_name
-app_name=${app_name:-'laravel-app'}
-
-# Demander la version de Laravel
-read -p "Choisissez la version de Laravel (ex : 10.x ou laissez vide pour la version par défaut) : " laravel_version
-
-# Télécharger Laravel dans un dossier temporaire pour récupérer les exigences
-temp_dir=$(mktemp -d)
-if [ -z "$laravel_version" ]; then
-  composer create-project laravel/laravel "$temp_dir" --quiet
-else
-  composer create-project laravel/laravel:"$laravel_version" "$temp_dir" --quiet
-fi
-
-# Détecter la version PHP requise à partir du composer.json de Laravel
-raw_php_version=$(awk -F'"' '/"php":/ {print $4}' "$temp_dir/composer.json" | head -1)
-
-# Nettoyer la version pour enlever les caractères spéciaux (^, ~)
-required_php=$(echo "$raw_php_version" | sed 's/[^0-9\.]//g')
-
-# Afficher la version détectée ou une valeur par défaut
-if [ -n "$required_php" ]; then
-  echo "Laravel nécessite PHP version $required_php"
-else
-  echo "Impossible de détecter la version PHP requise. Utilisation de PHP 8.2 par défaut."
-  required_php="8.2"
-fi
-
-# Supprimer le dossier temporaire
-rm -rf "$temp_dir"
-
-# Demander le type de base de données
-echo "Choisissez la base de données :"
-echo "1. MySQL"
-echo "2. PostgreSQL"
-read -p "Votre choix (1 ou 2) : " db_choice
-
-if [ "$db_choice" == "1" ]; then
-  db_type="mysql"
-  db_image="mysql:8.0"
-  db_port="3306"
-  db_env="MYSQL_ROOT_PASSWORD=root"
-elif [ "$db_choice" == "2" ]; then
-  db_type="postgres"
-  db_image="postgres:14"
-  db_port="5432"
-  db_env="  PGPASSWORD: '\${DB_PASSWORD:-root}'
-        POSTGRES_MULTIPLE_DATABASES: '\${DB_DATABASE:-$app_name},\${DB_DATABASE_TEST:-$app_name-test}'
-        POSTGRES_USER: '\${DB_USERNAME:-admin}'
-        POSTGRES_PASSWORD: '\${DB_PASSWORD:-root}'"
-else
-  echo "Choix invalide. Par défaut, MySQL sera utilisé."
-  db_type="mysql"
-  db_image="mysql:8.0"
-  db_port="3306"
-  db_env="MYSQL_ROOT_PASSWORD=root"
-fi
-
-# Télécharger Laravel
-echo "Téléchargement de Laravel..."
-if [ -z "$laravel_version" ]; then
-  composer create-project laravel/laravel "$install_path/$app_name"
-else
-  composer create-project laravel/laravel:"$laravel_version" "$install_path/$app_name"
-fi
-
-# Adapter le fichier .env
-env_file="$install_path/$app_name/.env"
-if [ -f "$env_file" ]; then
-  echo "Configuration du fichier .env..."
-
-  # Fonction pour gérer chaque variable
-  update_or_add_env_var() {
-    local var_name="$1"
-    local var_value="$2"
-    local file="$3"
-
-    # Si la variable est commentée, décommenter et mettre à jour
-    if grep -q "^#\s*${var_name}=" "$file"; then
-      # sed -i.bak "s/^#\s*${var_name}=.*/${var_name}=${var_value}/" "$file"
-      sed -i '' "s/^[[:space:]]*# ${var_name}=.*/${var_name}=${var_value}/" "$file"
-    # Si la variable existe mais n'est pas commentée, simplement mettre à jour
-    elif grep -q "^${var_name}=" "$file"; then
-      sed -i.bak "s/^${var_name}=.*/${var_name}=${var_value}/" "$file"
-    # Si la variable n'existe pas, l'ajouter
+# === Vérification de la disponibilité de Composer ===
+function check_composer() {
+    if ! command -v composer &> /dev/null; then
+        display_red "Composer n'est pas installé ou n'est pas dans le PATH. Installez Composer avant de continuer."
+        exit 1
     else
-      echo "${var_name}=${var_value}" >> "$file"
+        display_green "Composer est disponible."
     fi
-  }
-
-  # Mettre à jour ou ajouter chaque variable
-  update_or_add_env_var "APP_NAME" "$app_name" "$env_file"
-  update_or_add_env_var "APP_LOCALE" "fr" "$env_file"
-  update_or_add_env_var "APP_FALLBACK_LOCALE" "fr" "$env_file"
-  update_or_add_env_var "APP_FAKER_LOCALE" "fr_FR" "$env_file"
-  update_or_add_env_var "DB_CONNECTION" "$db_type" "$env_file"
-  update_or_add_env_var "DB_HOST" "db" "$env_file"
-  update_or_add_env_var "DB_PORT" "$db_port" "$env_file"
-  update_or_add_env_var "DB_DATABASE" "laravel" "$env_file"
-  update_or_add_env_var "DB_DATABASE_TEST" "laravel-test" "$env_file"
-  update_or_add_env_var "DB_USERNAME" "root" "$env_file"
-  update_or_add_env_var "DB_PASSWORD" "root" "$env_file"
-  update_or_add_env_var "DOCKER_APP_PORT" "8000" "$env_file"
-
-  echo "Fichier .env mis à jour avec succès."
-else
-  echo "Erreur : fichier .env introuvable dans $install_path/$app_name."
-  exit 1
-fi
-
-
-# Se déplacer dans le dossier Laravel
-cd "$install_path/$app_name" || exit
-
-mkdir pg-init-scripts
-cd "pg-init-scripts" || exit
-cat <<EOL > create-multiple-postgresql-databases.sh
-#!/bin/bash
-
-set -e
-set -u
-
-function create_user_and_database() {
-	local database=$1
-	echo "  Creating user and database '$database'"
-	psql -v ON_ERROR_STOP=1 --username "$POSTGRES_USER" <<-EOSQL
-	    CREATE USER $database;
-	    CREATE DATABASE $database;
-	    GRANT ALL PRIVILEGES ON DATABASE $database TO $database;
-EOSQL
 }
 
-if [ -n "$POSTGRES_MULTIPLE_DATABASES" ]; then
-	echo "Multiple database creation requested: $POSTGRES_MULTIPLE_DATABASES"
-	for db in $(echo $POSTGRES_MULTIPLE_DATABASES | tr ',' ' '); do
-		create_user_and_database $db
-	done
-	echo "Multiple databases created"
-fi
+# === Installation de Laravel Installer ===
+function install_laravel_installer() {
+  echo ""
+    if ! command -v laravel &> /dev/null; then
+        display_green "Installation de Laravel Installer..."
+        composer global require laravel/installer || { display_red "Échec de l'installation de Laravel Installer."; exit 1; }
+
+        # Ajouter le dossier global de Composer au PATH si nécessaire
+        COMPOSER_BIN_PATH="$HOME/.composer/vendor/bin"
+        if [[ ":$PATH:" != *":$COMPOSER_BIN_PATH:"* ]]; then
+            display_green "Ajout de Composer global bin au PATH..."
+            export PATH="$PATH:$COMPOSER_BIN_PATH"
+            echo "export PATH=\"\$PATH:$COMPOSER_BIN_PATH\"" >> ~/.bashrc
+            source ~/.bashrc
+        fi
+    else
+        display_green "Laravel Installer est déjà installé."
+    fi
+}
+
+# === Demander les détails du projet ===
+function ask_project_details() {
+    echo ""
+    read -p "Entrez le nom du projet Laravel que vous souhaitez créer : " PROJECT_NAME
+    if [ -z "$PROJECT_NAME" ]; then
+        display_red "Le nom du projet ne peut pas être vide. Relancez le script et entrez un nom valide."
+        exit 1
+    fi
+
+    display_green "Choisissez le type de projet Laravel à créer :"
+    echo "1. Projet standard (par défaut)"
+    echo "2. Projet optimisé pour une API REST"
+    read -p "Entrez votre choix (1 ou 2) : " PROJECT_TYPE
+
+    read -p "Souhaitez-vous une version dockerisée du projet ? (y/n) : " DOCKERIZE
+}
+
+# === Création d'un projet Laravel ===
+function create_laravel_project() {
+   echo ""
+    if [ "$PROJECT_TYPE" == "2" ]; then
+        display_green "Création d'un projet optimisé pour une API REST : $PROJECT_NAME..."
+        laravel new "$PROJECT_NAME" --api || { display_red "Échec de la création du projet Laravel."; exit 1; }
+    else
+        display_green "Création d'un projet Laravel standard : $PROJECT_NAME..."
+        laravel new "$PROJECT_NAME" || { display_red "Échec de la création du projet Laravel."; exit 1; }
+    fi
+    cd "$PROJECT_NAME" || { display_red "Impossible de se déplacer dans le répertoire du projet."; exit 1; }
+}
+
+# === Configuration d'une API REST ===
+function configure_api_project() {
+   echo ""
+    if [ "$PROJECT_TYPE" == "2" ]; then
+        display_green "Configuration d'une API REST..."
+
+        # Modifier la route par défaut
+        cat <<EOL > routes/web.php
+<?php
+
+use Illuminate\Support\Facades\Route;
+
+Route::get('/', function () {
+    return response()->json(
+      ["message" => "Bienvenue sur l'API $PROJECT_NAME ! (example: /api/example)"],
+      200,
+      [],
+      JSON_UNESCAPED_SLASHES
+    );
+});
 EOL
 
-cd ..
+        # Suppression des fichiers inutiles pour une API REST
+        rm -rf resources/views public/css public/js public/images
 
-# Créer un fichier docker-compose.yml
-cat <<EOL > docker-compose.yml
+        # Création d'un contrôleur API
+        php artisan make:controller Api/ExampleController --api
+
+        # Ajouter des routes API
+        echo "use App\Http\Controllers\Api\ExampleController;" >> routes/api.php
+        echo "Route::get('/example', [ExampleController::class, 'index']);" >> routes/api.php
+
+        # Modifier le contrôleur
+        cat <<EOL > app/Http/Controllers/Api/ExampleController.php
+<?php
+
+namespace App\Http\Controllers\Api;
+
+use App\Http\Controllers\Controller;
+
+class ExampleController extends Controller
+{
+    public function index()
+    {
+        return response()->json(['message' => 'Hello, this is your API!']);
+    }
+}
+EOL
+    fi
+}
+
+# === Générer les fichiers Docker ===
+function generate_docker_files() {
+  echo ""
+    if [ "$DOCKERIZE" == "y" ]; then
+        display_green "Génération des fichiers Docker..."
+        # Générer le Dockerfile
+        cat <<EOL > Dockerfile
+LABEL maintainer="Belkaid Nohame <belkaid.nohame@gmail.com>" description="PHP:8.1-fpm optimisé pour Laravel"
+
+# Image de base
+FROM php:8.1-fpm
+
+# Installation des dépendances
+RUN apt-get update && apt-get install -y \\
+    curl zip unzip git libpq-dev \\
+    && docker-php-ext-install pdo pdo_pgsql pdo_mysql
+
+# Installation de Composer
+RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+
+WORKDIR /var/www/html
+COPY . .
+RUN composer install
+EXPOSE 9000
+CMD ["php-fpm"]
+EOL
+
+        # Générer docker-compose.yml
+        cat <<EOL > docker-compose.yml
 services:
-
   app:
     build:
       context: .
-      args:
-        PHP_VERSION: "$required_php"
+      dockerfile: Dockerfile
+    container_name: ${PROJECT_NAME}_app
+    working_dir: /var/www/html
     volumes:
       - .:/var/www/html
     ports:
-      - "${DOCKER_APP_PORT:-8000}:${DOCKER_APP_PORT:-8000}"
-    depends_on:
-      - db
-  db:
-    image: $db_image
-    ports:
-      - '${FORWARD_DB_PORT:-$db_port}:$db_port'
+      - 8000:8000
     environment:
-      $db_env
-    volumes:
-      - './pg-init-scripts:/docker-entrypoint-initdb.d'
-      - 'pgsql-$app_name:/var/lib/postgresql/data'
-    healthcheck:
-      test: [ "CMD", "pg_isready", "-q", "-d", "${DB_DATABASE}", "-U", "${DB_USERNAME}" ]
-
-volumes:
-  pgsql-$app_name:
-    driver: local
+      - APP_ENV=local
+      - APP_DEBUG=true
+    command: php artisan serve --host=0.0.0.0 --port=8000
 EOL
 
-# Créer un Dockerfile avec la version correcte de PHP
-cat <<EOL > Dockerfile
-ARG PHP_VERSION
-FROM php:\${PHP_VERSION}-cli
+        display_green "Les fichiers Dockerfile et docker-compose.yml ont été générés."
+    fi
+}
 
-LABEL maintainer="Belkaid Nohame <belkaid.nohame@gmail.com>" description="php:$required_php-cli optimisé pour Laravel"
+function create_docker_script() {
+   echo ""
+    if [ "$DOCKERIZE" == "y" ]; then
+        display_green "Création du script docker.sh ..."
+        cat <<EOL > docker.sh
+#!/bin/bash
 
-RUN apt-get update && apt-get install -y unzip curl libzip-dev libpng-dev libonig-dev libxml2-dev libpq-dev && apt-get clean && rm -rf /var/lib/apt/lists/*
-RUN docker-php-ext-install pdo pdo_mysql pdo_pgsql mbstring zip exif pcntl
+# === Variables globales ===
+DIRNAME="\$(dirname "\$0")"
+WORKDIR='/usr/src/myapp'
+APP_ENV=local
+DOCKER_APP="${PROJECT_NAME}"
 
-# Install Composer
-RUN curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
-
-COPY . /var/www/html/
-WORKDIR /var/www/html
-
-RUN composer install --no-interaction --optimize-autoloader
-RUN echo "alias ll='ls -lisa'" >> ~/.bashrc
-
-CMD ["php", "artisan", "serve", "--host=0.0.0.0"]
-EOL
-
-# Créer un fichier docker.sh
-cat <<EOL > docker.sh
-#!/usr/bin/env sh
-
-# Variables globales
-DOCKER_APP_PORT=\${DOCKER_APP_PORT:-8080}
-APP_NAME=\${APP_NAME:-default-app}
-WORKDIR='/var/www/html'
-
+# Charger le script distant pour les couleurs et les messages
 source /dev/stdin <<< "\$(curl -fsSL https://raw.githubusercontent.com/Nohame/shared-scripts/main/mac-sh/colors-messages.sh)"
 
-# Vérification du fichier .env
-check_env_vars() {
- env_sample_file=".env.example"
- env_file=".env"
-
- # Vérifie que les deux fichiers existent
- if [ ! -f "\$env_sample_file" ]; then
-   display_error "Erreur : le fichier \$env_sample_file n'existe pas."
-   return 1
- fi
-
- if [ ! -f "\$env_file" ]; then
-   display_error "Erreur : le fichier \$env_file n'existe pas."
-   return 1
- fi
-
- # Parcours des variables dans .env.example
- missing_vars=0
- while IFS= read -r line || [ -n "\$line" ]; do
-   # Ignore les lignes vides ou les commentaires
-   line=\$(echo "\$line" | xargs)
-   if [[ -z "\$line" || "\$line" =~ ^# ]]; then
-     continue
-   fi
-
-   # Extrait le nom de la variable
-   var_name=\$(echo "\$line" | cut -d'=' -f1)
-
-   # Vérifie si la variable est présente dans .env
-   if ! grep -q "^\$var_name=" "\$env_file"; then
-     display_error "Variable manquante dans \$env_file : \$var_name"
-     missing_vars=\$((missing_vars + 1))
-   fi
- done < "\$env_sample_file"
-
- # Affiche un message final
- if [ \$missing_vars -eq 0 ]; then
-   display "Toutes les variables de \$env_sample_file sont présentes dans \$env_file."
-   return 0
- else
-   display_error "\$missing_vars variable(s) manquante(s) dans \$env_file."
-   return 1
- fi
-}
-
-# Vérification de Docker Compose
+# === Fonction : Détecter docker-compose ===
 detect_docker_compose() {
- if command -v docker compose > /dev/null 2>&1; then
-   echo "docker compose"
- elif command -v docker-compose > /dev/null 2>&1; then
-   echo "docker-compose"
- else
-   display_error "Erreur : ni 'docker compose' ni 'docker-compose' n'est installé."
-   exit 1
- fi
+    if command -v docker compose > /dev/null 2>&1; then
+        DOCKER_COMPOSE="docker compose"
+    elif command -v docker-compose > /dev/null 2>&1; then
+        DOCKER_COMPOSE="docker-compose"
+    else
+        display_error "Erreur : ni 'docker compose' ni 'docker-compose' n'est installé."
+        exit 1
+    fi
 }
 
-# Affichage des commandes disponibles
+# === Fonction : Afficher les commandes disponibles ===
 usage() {
- echo ""
- echo "################ \${YELLOW}AVAILABLE COMMANDS\${RESET_COLOR} ################"
- echo ""
- echo "start      - Démarrer l'environnement Docker"
- echo "stop       - Arrêter l'environnement Docker"
- echo "restart    - Redémarrer l'environnement Docker"
- echo "status     - Afficher l'état des conteneurs Docker"
- echo "ssh        - Se connecter en SSH au conteneur de l'application"
- echo "sql        - Se connecter à la base de données"
- echo ""
- exit 1
+    echo ""
+    echo "################ \${YELLOW}AVAILABLE COMMANDS\${RESET_COLOR} ################"
+    echo "start                         Lancer l'application avec Docker Compose"
+    echo "stop                          Arrêter les conteneurs Docker Compose"
+    echo "restart                       Redémarrer les conteneurs Docker Compose"
+    echo "ssh                           Se connecter au conteneur de l'application"
+    echo ""
+    exit 1
 }
 
-# Vérification et traitement des actions
-handle_action() {
- local action=\$1
- local DOCKER_COMPOSE
- DOCKER_COMPOSE=\$(detect_docker_compose)
-
- case \$action in
-   start)
-     \$DOCKER_COMPOSE up -d
-     display "Docker démarré sur http://localhost:\$DOCKER_APP_PORT"
-     ;;
-   stop)
-     \$DOCKER_COMPOSE down
-     display "Docker arrêté."
-     ;;
-   restart)
-     \$DOCKER_COMPOSE down
-     \$DOCKER_COMPOSE up -d
-     display "Docker redémarré sur http://localhost:\$DOCKER_APP_PORT"
-     ;;
-   status)
-     \$DOCKER_COMPOSE ps
-     ;;
-   ssh)
-     docker exec -e COLUMNS="`tput cols`" -e LINES="`tput lines`" -ti "\$APP_NAME-app-1" bash -c "cd \$WORKDIR && /bin/bash"
-     ;;
-   sql)
-     docker exec -ti \$APP_NAME-db-1 psql -U "\$DB_USERNAME" -d "\$DB_DATABASE"
-     ;;
-   *)
-     display_error "Action inconnue : \$action"
-     usage
-     ;;
- esac
+# === Fonction : Démarrer Docker Compose ===
+start_docker_compose() {
+    detect_docker_compose
+    \$DOCKER_COMPOSE up -d
+    display_success "Docker Compose a démarré avec succès."
+    \$DOCKER_COMPOSE logs --tail=0 --follow
 }
 
-# Vérification initiale des fichiers et des variables
-if [ ! -f .env ]; then
- display_error "Erreur : le fichier .env est manquant. Veuillez le configurer avant de démarrer l'environnement."
- exit 1
-fi
+# === Fonction : Arrêter Docker Compose ===
+stop_docker_compose() {
+    detect_docker_compose
+    \$DOCKER_COMPOSE down
+    display_success "Docker Compose a été arrêté."
+}
 
-source .env
+# === Fonction : Redémarrer Docker Compose ===
+restart_docker_compose() {
+    stop_docker_compose
+    start_docker_compose
+}
 
-if ! check_env_vars; then
- display_error "Le script est arrêté car des variables sont manquantes dans .env."
- exit 1
-fi
+# === Fonction : Accéder au conteneur via SSH ===
+ssh_to_container() {
+    detect_docker_compose
+    docker exec -e COLUMNS="\$(tput cols)" -e LINES="\$(tput lines)" -ti \$DOCKER_APP bash -c "cd \$WORKDIR && /bin/bash"
+}
 
-# Exécuter l'action
-action=\$1
-if [ -z "\$action" ]; then
- usage
-else
- handle_action "\$action"
-fi
+# === Fonction principale ===
+main() {
+    action="\$1"
 
+    case "\$action" in
+        start) start_docker_compose ;;
+        stop) stop_docker_compose ;;
+        restart) restart_docker_compose ;;
+        ssh) ssh_to_container ;;
+        *) usage ;;
+    esac
+}
+
+# Lancement
+main "\$@"
 EOL
 
-chmod +x docker.sh
+        chmod +x docker.sh
+        display_green "Le script docker.sh a été créé et rendu exécutable."
+    fi
+}
 
-# Lancer Docker
-docker compose up -d
+# === Lancer le serveur de développement ===
+function launch_server() {
+   echo ""
+    if [ "$DOCKERIZE" == "y" ]; then
+        display_green "Lancement de l'application avec Docker..."
+        ./docker.sh start
+    else
+        display_green "Lancement du serveur de développement..."
+        php artisan serve
+    fi
+}
 
-# Vérifier si les conteneurs sont bien démarrés
-if [ $? -ne 0 ]; then
-  echo "Erreur : Les conteneurs Docker n'ont pas pu être démarrés." >&2
-  exit 1
-fi
+# === Main ===
+function main() {
+    check_composer
+    install_laravel_installer
+    ask_project_details
+    create_laravel_project
+    configure_api_project
+    generate_docker_files
+    create_docker_script
+    launch_server
+}
 
-# Afficher les informations
-echo "Laravel a été installé avec succès dans le dossier : $install_path/$app_name"
-echo "Application disponible à l'adresse : http://localhost:8000"
-echo "Base de données : $db_type sur le port $db_port."
+# Exécuter le script principal
+main
