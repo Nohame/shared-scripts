@@ -42,11 +42,13 @@ function ask_project_details() {
         exit 1
     fi
 
+    echo ""
     display_green "Choisissez le type de projet Laravel à créer :"
     echo "1. Projet standard (par défaut)"
     echo "2. Projet optimisé pour une API REST"
+    echo ""
     read -p "Entrez votre choix (1 ou 2) : " PROJECT_TYPE
-
+    echo ""
     read -p "Souhaitez-vous une version dockerisée du projet ? (y/n) : " DOCKERIZE
 }
 
@@ -277,5 +279,4 @@ function main() {
     launch_server
 }
 
-# Exécuter le script principal
 main
