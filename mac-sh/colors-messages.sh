@@ -32,3 +32,20 @@ display_success()
 {
     echo ">>${GREEN} $@${RESET_COLOR}"
 }
+
+display_yellow() {
+    echo ">>${YELLOW} $@${RESET_COLOR}"
+}
+
+display_bleu() {
+    echo ">>${BLUE} $@${RESET_COLOR}"
+}
+
+display_green() {
+    echo ">>${GREEN} $@${RESET_COLOR}"
+}
+
+display_red() {
+    echo ">>${RED} $@${RESET_COLOR}"
+}
+
